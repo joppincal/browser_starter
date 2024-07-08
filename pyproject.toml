@@ -1,0 +1,19 @@
+[tool.poetry]
+name = "browser-starter"
+version = "0.1.0"
+description = "Open URLs in the specified browser"
+authors = ["joppincal <106348367+joppincal@users.noreply.github.com>"]
+license = "GPL-3.0-or-later"
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.12"
+
+[tool.poetry.group.dev.dependencies]
+black = "^24.4.2"
+isort = "^5.13.2"
+flake8 = "^7.1.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
