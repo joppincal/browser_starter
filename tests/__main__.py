@@ -5,6 +5,7 @@ import os
 import platform
 import shutil
 import subprocess
+import sys
 import tempfile
 import webbrowser
 import winreg
@@ -17,6 +18,7 @@ from logging import (
     getLogger,
     handlers,
 )
+from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
 import click
@@ -39,25 +41,29 @@ def log_setting(stdout: bool = False, fileout: bool = True):
     else:
         logger.setLevel(DEBUG)
 
-    if not os.path.exists("./log"):
-        os.mkdir("./log")
-
     formater = Formatter(
-        "{asctime} {name:<21s} {levelname:<8s} {message}", style="{"
+        "{asctime} {name} {levelname:<8s} {message}", style="{"
     )
-    rotating_file_handler = handlers.RotatingFileHandler(
-        filename="./log/soroeditor.log",
-        encoding="utf-8",
-        maxBytes=102400,
-        backupCount=10,
-    )
-    rotating_file_handler.setFormatter(formater)
-    logger.addHandler(rotating_file_handler)
 
-    stream_handler = StreamHandler()
-    stream_handler.setLevel(INFO)
-    stream_handler.setFormatter(formater)
-    logger.addHandler(stream_handler)
+    if fileout:
+        log_dir = Path.home() / ".browser_starter" / "log"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_file = log_dir / "browser_starter.log"
+
+        rotating_file_handler = handlers.RotatingFileHandler(
+            filename=log_file,
+            encoding="utf-8",
+            maxBytes=1_000_000,
+            backupCount=10,
+        )
+        rotating_file_handler.setFormatter(formater)
+        logger.addHandler(rotating_file_handler)
+
+    if stdout:
+        stream_handler = StreamHandler()
+        stream_handler.setLevel(INFO)
+        stream_handler.setFormatter(formater)
+        logger.addHandler(stream_handler)
 
     return logger
 
@@ -91,7 +97,7 @@ def get_browser_path_windows(browser_name: str) -> Optional[str]:
         browser_key = rf"SOFTWARE\Clients\StartMenuInternet\{browser_name}"
         key_path = rf"{browser_key}\shell\open\command"
         with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_path) as key:
-            command = winreg.QueryValueEx(key, None)[0]
+            command = winreg.QueryValueEx(key, "")[0]
             path = command.replace('"', "")
             return path
     except WindowsError as e:
@@ -172,7 +178,7 @@ async def open_url(browser: webbrowser.BaseBrowser, url: str) -> None:
     """
     Open a URL asynchronously.
     """
-    success = browser.open(url, new=2)  # new=2 は新しいタブで開くことを指定
+    success = browser.open(url, new=2)  # new=2 specifies opening in a new tab
     logger.info(f"Opening URL: {url} - Success: {success}")
     await asyncio.sleep(0.5)
 
@@ -188,15 +194,17 @@ async def open_urls_in_browser(
 
     logger.info(f"Opening URLs in {browsername}")
     logger.debug(f"Registered browsers: {REGISTERED_BROWSERS}")
-    logger.debug(f"Webbrowser browsers: {webbrowser._browsers}")
+    logger.debug(
+        f"Webbrowser browsers: {webbrowser._browsers}"  # type: ignore
+    )
 
     start_page = get_start_page()
     process = subprocess.Popen(
-        [browserpath, "--new-window", start_page], shell=True
+        [browserpath, "--new-window", start_page], shell=True  # type: ignore
     )
     logger.info(f"Started browser process with PID: {process.pid}")
 
-    await asyncio.sleep(1)  # Wait for the browser to initialize
+    await asyncio.sleep(3)  # Wait for the browser to initialize
 
     await open_strategy(browser, urls)
 
@@ -268,10 +276,38 @@ def get_start_page(
 
         atexit.register(lambda: os.remove(temp_file_name))
 
-        return "file://" + os.path.abspath(temp_file_name)
+        return Path(temp_file_name).absolute().as_uri()
     except IOError as e:
         logger.error(f"Error creating temporary file: {e}")
         return None
+
+
+def display_registered_browsers():
+    if not REGISTERED_BROWSERS:
+        click.echo("No browsers registered.")
+        return
+
+    click.echo("Browser list")
+    items = REGISTERED_BROWSERS.items()
+    max_key = max(len(item[0]) for item in items)
+    max_value = max(len(item[1]) for item in items)
+
+    # Consider the length of column names as well
+    BROWSER_NAME_COLUMN = "browser-name"
+    BROWSER_PATH_COLUMN = "path/to/browser"
+    max_key = max(max_key, len(BROWSER_NAME_COLUMN))
+    max_value = max(max_value, len(BROWSER_PATH_COLUMN))
+
+    slash = "\\" if platform.system() == "Windows" else "/"
+
+    # Display the header
+    click.echo(f"  {BROWSER_NAME_COLUMN:<{max_key}} |>  ", nl=False)
+    click.echo(f"{BROWSER_PATH_COLUMN.replace('/', slash)}")
+    click.echo("-" * (max_key + max_value + 10))
+
+    # Display browser information
+    for key, value in items:
+        click.echo(f"  {key:<{max_key}} |>  {value}")
 
 
 async def main(
@@ -289,9 +325,13 @@ async def main(
     await asyncio.gather(*tasks)
 
 
-@click.command()
+@click.command(context_settings=dict(help_option_names=["-h", "--help"]))
 @click.option(
-    "-bn", "--browser-name", multiple=True, help="Name of the browser to use"
+    "-b",
+    "-bn",
+    "--browser-name",
+    multiple=True,
+    help="Name of the browser to use",
 )
 @click.option(
     "-bp",
@@ -310,13 +350,30 @@ async def main(
     "--fast/--ordered",
     help="Fast mode (order not guaranteed)/Order keeping mode (slow/default)",
 )
+@click.option(
+    "-l",
+    "-bl",
+    "--browser-list",
+    is_flag=True,
+    help="Listing the names of available browsers",
+)
 @click.argument("urls", nargs=-1, required=False)
-def cli(browser_name, browser_path, config, fast, urls):
-    """Open URLs in specified browser. If no URLs are provided, only the start page will be opened."""
+def cli(browser_name, browser_path, config, fast, browser_list, urls):
+    """Open URLs in specified browser.
+    If no URLs are provided, only the start page will be opened."""
+    if len(sys.argv) == 1:
+        cli.main(["--help"])
+
+    if browser_list:
+        register_all_installed_browsers()
+        display_registered_browsers()
+        return
+
     if config:
         if browser_name or browser_path:
             click.echo(
-                "Warning: Config file specified. Ignoring browser name and path options.",
+                "Warning: Config file specified. "
+                + "Ignoring browser name and path options.",
                 err=True,
             )
         # TODO: Implement TOML file parsing and use its content
@@ -325,7 +382,8 @@ def cli(browser_name, browser_path, config, fast, urls):
 
     if browser_name and browser_path:
         click.echo(
-            "Warning: Both browser name and path specified. Using browser path.",
+            "Warning: Both browser name and path specified. "
+            + "Using browser path.",
             err=True,
         )
         # TODO: Implement TOML file parsing and use its content
