@@ -330,13 +330,13 @@ async def main(
     "-bn",
     "--browser-name",
     multiple=True,
-    help="Name of the browser to use",
+    help="(multiple) Name of the browser to use",
 )
 @click.option(
     "-bp",
     "--browser-path",
     multiple=True,
-    help="Path to the browser executable",
+    help="(multiple) Path to the browser executable",
 )
 @click.option(
     "-c",
@@ -379,28 +379,18 @@ def cli(browser_name, browser_path, config, fast, browser_list, urls):
         click.echo("TOML configuration file support not yet implemented.")
         return
 
-    if browser_name and browser_path:
-        click.echo(
-            "Warning: Both browser name and path specified. "
-            + "Using browser path.",
-            err=True,
-        )
-        # TODO: Implement TOML file parsing and use its content
-        click.echo("Browser pathes support not yet implemented.")
-        return
-        browser = browser_path
-    elif browser_path:
-        # TODO: Implement TOML file parsing and use its content
-        click.echo("Browser pathes support not yet implemented.")
-        return
-        browser = list(browser_path)
-    elif browser_name:
-        browser = list(browser_name)
-    else:
+    browser = list()
+    if not all([browser_name, browser_path]):
         click.echo(
             "Error: Either browser name or path must be specified.", err=True
         )
         return
+    if browser_path:
+        for name in browser_path:
+            register_browser(name, name)
+        browser.extend(list(browser_path))
+    if browser_name:
+        browser.extend(list(browser_name))
 
     if not urls:
         urls = []
