@@ -356,8 +356,14 @@ async def main(
     is_flag=True,
     help="Listing the names of available browsers",
 )
-@click.argument("urls", nargs=-1, required=False)
-def cli(browser_name, browser_path, config, fast, browser_list, urls):
+@click.option(
+    "-u",
+    "--urls",
+    multiple=True,
+    help="(multiple) URL to open (Option name can be omitted)"
+)
+@click.argument("urls_", nargs=-1, required=False)
+def cli(browser_name, browser_path, config, fast, browser_list, urls, urls_):
     """Open URLs in specified browser.
     If no URLs are provided, only the start page will be opened."""
     if len(sys.argv) == 1:
@@ -392,6 +398,7 @@ def cli(browser_name, browser_path, config, fast, browser_list, urls):
     if browser_name:
         browser.extend(list(browser_name))
 
+    urls = [*urls, *urls_]
     if not urls:
         urls = []
 
