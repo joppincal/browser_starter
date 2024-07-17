@@ -24,14 +24,15 @@ from typing import Callable, Dict, List, Optional
 import click
 
 # Constants
-CONFIG_FILE = "browser_config.json"
+ROOT_DIR = Path.home() / ".browser_starter"
+CONFIG_FILE = ROOT_DIR / "browser_starter.json"
 DEFAULT_COUNTDOWN_SECONDS = 6
 
 # Registered browsers
 REGISTERED_BROWSERS: Dict[str, str] = {}
 
 
-def log_setting(stdout: bool = False, fileout: bool = True):
+def log_setting(fileout: bool = True, stdout: bool = False):
     logger = getLogger(__name__)
 
     if not stdout and not fileout:
@@ -46,7 +47,7 @@ def log_setting(stdout: bool = False, fileout: bool = True):
     )
 
     if fileout:
-        log_dir = Path.home() / ".browser_starter" / "log"
+        log_dir = ROOT_DIR / "log"
         log_dir.mkdir(parents=True, exist_ok=True)
         log_file = log_dir / "browser_starter.log"
 
@@ -128,17 +129,15 @@ def get_installed_browsers() -> Dict[str, Optional[str]]:
         return dict(sorted(browsers.items()))
 
     if system == "Linux":
-        common_browsers = CONFIG.get(
-            "linux_browsers",
-            [
-                "firefox",
-                "google-chrome",
-                "chromium-browser",
-                "opera",
-                "brave-browser",
-                "vivaldi",
-            ],
-        )
+        common_browsers = [
+            "firefox",
+            "google-chrome",
+            "chromium-browser",
+            "opera",
+            "brave-browser",
+            "vivaldi",
+        ]
+
         return {
             browser: shutil.which(browser)
             for browser in common_browsers
@@ -146,7 +145,7 @@ def get_installed_browsers() -> Dict[str, Optional[str]]:
         }
 
     if system == "Darwin":  # macOS
-        # Implement macOS browser detection here
+        # TODO: Implement macOS browser detection here
         logger.warning("macOS browser detection not implemented yet.")
         return {}
 
