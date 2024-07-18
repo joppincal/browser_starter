@@ -3,6 +3,7 @@ import atexit
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -95,7 +96,7 @@ def get_browser_path_windows(browser_name: str) -> Optional[str]:
     Get browser path from Windows registry.
     """
     try:
-        browser_key = rf"SOFTWARE\Clients\StartMenuInternet\{browser_name}"
+        browser_key = rf"Software\Clients\StartMenuInternet\{browser_name}"
         key_path = rf"{browser_key}\shell\open\command"
         with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_path) as key:
             command = winreg.QueryValueEx(key, "")[0]
@@ -103,6 +104,31 @@ def get_browser_path_windows(browser_name: str) -> Optional[str]:
             return path
     except WindowsError as e:
         logger.error(f"Error getting browser path for {browser_name}: {e}")
+        return None
+
+
+def get_default_browser_path_windows() -> Optional[str]:
+    """
+    Get default browser path from Windows registry.
+    """
+    try:
+        key_path = r"Software\Microsoft\Windows\Shell"
+        key_path += r"\Associations\UrlAssociations\https\UserChoice"
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path) as key:
+            progid = winreg.QueryValueEx(key, "ProgID")[0]
+
+        key_path = rf"{progid}\shell\open\command"
+        with winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, key_path) as key:
+            command = winreg.QueryValueEx(key, "")[0]
+            print(command)
+            match = re.search(r'"?([^"]+\.exe)"?', command)
+            if match:
+                return match.group(1)
+            else:
+                return None
+
+    except WindowsError as e:
+        logger.error(f"Error getting default browser path: {e}")
         return None
 
 
@@ -385,24 +411,27 @@ def cli(browser_name, browser_path, config, fast, browser_list, urls, urls_):
         click.echo("TOML configuration file support not yet implemented.")
         return
 
-    browser = list()
+    browsers = list()
     if not all([browser_name, browser_path]):
-        click.echo(
-            "Error: Either browser name or path must be specified.", err=True
-        )
-        return
+        default_browser_path = get_default_browser_path_windows()
+        print(default_browser_path)
+        if default_browser_path:
+            register_browser(default_browser_path, default_browser_path)
+            browsers.append(default_browser_path)
+        else:
+            pass
     if browser_path:
         for name in browser_path:
             register_browser(name, name)
-        browser.extend(list(browser_path))
+        browsers.extend(list(browser_path))
     if browser_name:
-        browser.extend(list(browser_name))
+        browsers.extend(list(browser_name))
 
-    urls = [*urls, *urls_]
+    urls += urls_
     if not urls:
         urls = []
 
-    asyncio.run(main(browser, urls, fast))
+    asyncio.run(main(browsers, urls, fast))
 
 
 if __name__ == "__main__":
