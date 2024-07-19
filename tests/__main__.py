@@ -120,7 +120,6 @@ def get_default_browser_path_windows() -> Optional[str]:
         key_path = rf"{progid}\shell\open\command"
         with winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, key_path) as key:
             command = winreg.QueryValueEx(key, "")[0]
-            print(command)
             match = re.search(r'"?([^"]+\.exe)"?', command)
             if match:
                 return match.group(1)
@@ -386,7 +385,7 @@ async def main(
     "-u",
     "--urls",
     multiple=True,
-    help="(multiple) URL to open (Option name can be omitted)"
+    help="(multiple) URL to open (Option name can be omitted)",
 )
 @click.argument("urls_", nargs=-1, required=False)
 def cli(browser_name, browser_path, config, fast, browser_list, urls, urls_):
@@ -412,9 +411,8 @@ def cli(browser_name, browser_path, config, fast, browser_list, urls, urls_):
         return
 
     browsers = list()
-    if not all([browser_name, browser_path]):
+    if not any([browser_name, browser_path]):
         default_browser_path = get_default_browser_path_windows()
-        print(default_browser_path)
         if default_browser_path:
             register_browser(default_browser_path, default_browser_path)
             browsers.append(default_browser_path)
@@ -427,9 +425,14 @@ def cli(browser_name, browser_path, config, fast, browser_list, urls, urls_):
     if browser_name:
         browsers.extend(list(browser_name))
 
-    urls += urls_
+    if urls and urls_:
+        click.echo(
+            "Warning: Do not mix option names --urls with and without "
+            "omitted ones. The omitted notation is recommended."
+        )
+        return
     if not urls:
-        urls = []
+        urls = urls_
 
     asyncio.run(main(browsers, urls, fast))
 
