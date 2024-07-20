@@ -8,7 +8,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
+import tomllib
 import webbrowser
 import winreg
 from logging import (
@@ -24,6 +26,7 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
 import click
+import yaml
 
 # Location of configuration and log files
 ROOT_DIR = Path.home() / ".browser_starter"
@@ -70,6 +73,7 @@ def log_setting(fileout: bool = True, stdout: bool = False):
             maxBytes=1_000_000,
             backupCount=10,
         )
+        rotating_file_handler.setLevel(DEBUG)
         rotating_file_handler.setFormatter(formater)
         logger.addHandler(rotating_file_handler)
 
@@ -103,6 +107,118 @@ def load_config() -> Dict:
 
 
 CONFIG = load_config()
+
+
+def load_parameter_file(path: Path) -> Dict:
+    parameter_file = path.absolute()
+
+    suffix = parameter_file.suffix
+    func: Callable
+    if suffix in (".yml", ".yaml"):
+        func = yaml.safe_load
+    elif suffix == ".json":
+        func = json.load
+    elif suffix == ".toml":
+        func = tomllib.load
+    else:
+        func = lambda *a: None  # noqa
+
+    try:
+        with open(parameter_file, "rb") as f:
+            return func(f)
+
+    except FileNotFoundError:
+        logger.warning(f"Parameter file {parameter_file} not found.")
+
+    except yaml.YAMLError:
+        logger.error(f"Error decoding {parameter_file}.")
+
+    except json.JSONDecodeError:
+        logger.error(f"Error decoding {parameter_file}.")
+
+    except tomllib.TOMLDecodeError:
+        logger.error(f"Error decoding {parameter_file}.")
+
+    return {}
+
+
+def run_with_parameter_file(p_file_path: Path):
+    logger.info(f"Run with parameter file: {p_file_path}")
+
+    parameter = load_parameter_file(p_file_path).items()
+    threads = []
+
+    for _, di in parameter:
+        # Selecting a browser from the parameter file
+        browsers = list()
+
+        # Extract browser name
+        pattern = r"^(-bn|--browser-name)\d*$"
+        matching_items = [
+            value for key, value in di.items() if re.match(pattern, key)
+        ]
+        if matching_items:
+            browsers.extend(matching_items)
+
+        # Extract browser path
+        pattern = r"^(-bp|--browser-path)\d*$"
+        matching_items = [
+            value for key, value in di.items() if re.match(pattern, key)
+        ]
+        if matching_items:
+            for path in matching_items:
+                register_browser(path, path)
+            browsers.extend(matching_items)
+
+        # If no browser is specified, get the default browser
+        if not browsers:
+            default_browser_path = get_default_browser_path_windows()
+            if default_browser_path:
+                register_browser(default_browser_path, default_browser_path)
+                browsers.append(default_browser_path)
+            else:
+                pass
+
+        # Get URL from parameter file
+        pattern = r"^(-u|--urls)"
+        matching_items = [
+            value for key, value in di.items() if re.match(pattern, key)
+        ]
+        urls = [
+            url
+            for item in matching_items
+            for url in (item if isinstance(item, list) else [item])
+            if isinstance(url, str)
+        ]
+
+        # Get fast mode from parameter file
+        pattern = r"^(-f|--fast|-o|--ordered)$"
+        matching_items = [
+            key for key, _ in di.items() if re.match(pattern, key)
+        ]
+        if matching_items:
+            if matching_items[0] in {"-f", "--fast"}:
+                fast = True
+            elif matching_items[0] in {"-o", "--ordered"}:
+                fast = False
+        else:
+            fast = False
+
+        logger.debug(
+            "Parameter file parameter; "
+            f"browsers: {browsers}, urls: {urls}, fast: {fast}"
+        )
+
+        t = threading.Thread(
+            target=async_run_main, args=[browsers, urls, fast]
+        )
+        threads.append(t)
+
+    for t in threads:
+        t.start()
+
+    for t in threads:
+        t.join()
 
 
 def get_browser_path_windows(browser_name: str) -> Optional[str]:
@@ -263,10 +379,6 @@ async def open_urls_in_browser(
     logger.debug(f"Browser path: {browserpath}")
 
     logger.info(f"Opening URLs in {browsername}")
-    logger.debug(f"Registered browsers: {REGISTERED_BROWSERS}")
-    logger.debug(
-        f"Webbrowser browsers: {webbrowser._browsers}"  # type: ignore
-    )
 
     start_page = get_start_page()
     logger.debug(f"Start page URL: {start_page}")
@@ -387,6 +499,12 @@ def display_registered_browsers():
         click.echo(f"  {key:<{max_key}} |>  {value}")
 
 
+def async_run_main(
+    browsernames: List[str], urls: List[str], fast_mode: bool = True
+):
+    asyncio.run(main(browsernames, urls, fast_mode))
+
+
 async def main(
     browsernames: List[str], urls: List[str], fast_mode: bool = True
 ) -> None:
@@ -395,7 +513,6 @@ async def main(
     """
     start_time = time.perf_counter()
 
-    register_all_installed_browsers()
     open_strategy = open_urls_fast if fast_mode else open_urls_ordered
     tasks = [
         open_urls_in_browser(browsername, urls, open_strategy)
@@ -404,6 +521,10 @@ async def main(
     logger.info(f"Starting main function with browsers: {browsernames}")
     logger.info(f"URLs to open: {urls}")
     logger.info(f"Fast mode: {fast_mode}")
+    logger.debug(f"Registered browsers: {REGISTERED_BROWSERS}")
+    logger.debug(
+        f"Webbrowser browsers: {webbrowser._browsers}"  # type: ignore
+    )
 
     try:
         await asyncio.gather(*tasks)
@@ -417,7 +538,6 @@ async def main(
 
 @click.command(context_settings=dict(help_option_names=["-h", "--help"]))
 @click.option(
-    "-b",
     "-bn",
     "--browser-name",
     multiple=True,
@@ -430,10 +550,13 @@ async def main(
     help="(multiple) Path to the browser executable",
 )
 @click.option(
-    "-c",
-    "--config",
-    type=click.Path(exists=True),
-    help="Path to TOML configuration file",
+    "-pf",
+    "--parameter-file",
+    "p_file",
+    default=None,
+    is_flag=False,
+    flag_value=ROOT_DIR / "browser_starter_parameter.yaml",
+    help="Path to parameter file",
 )
 @click.option(
     "-f/-o",
@@ -454,7 +577,7 @@ async def main(
     help="(multiple) URL to open (Option name can be omitted)",
 )
 @click.argument("urls_", nargs=-1, required=False)
-def cli(browser_name, browser_path, config, fast, browser_list, urls, urls_):
+def cli(browser_name, browser_path, p_file, fast, browser_list, urls, urls_):
     """Open URLs in specified browser.
     If no URLs are provided, only the start page will be opened."""
     logger.info("Starting CLI")
@@ -464,22 +587,29 @@ def cli(browser_name, browser_path, config, fast, browser_list, urls, urls_):
     if len(sys.argv) == 1:
         cli.main(["--help"])
 
+    register_all_installed_browsers()
+
     # Display browser list and exit
     if browser_list:
-        register_all_installed_browsers()
         display_registered_browsers()
         return
 
     # When a parameter file is passed, process accordingly
-    if config:
-        if browser_name or browser_path:
+    if p_file:
+        p_file_path = Path(p_file)
+
+        if not p_file_path.exists():
+            logger.warning(f"Parameter file {p_file_path} not found.")
+            return
+
+        if browser_name or browser_path or urls:
             click.echo(
-                "Warning: Config file specified. "
-                + "Ignoring browser name and path options.",
+                "Warning: Config file specified. " + "Ignoring other options.",
                 err=True,
             )
-        # TODO: Implement TOML file parsing and use its content
-        click.echo("TOML configuration file support not yet implemented.")
+
+        run_with_parameter_file(p_file_path)
+
         return
 
     browsers = list()
@@ -493,8 +623,8 @@ def cli(browser_name, browser_path, config, fast, browser_list, urls, urls_):
             pass
     # When bp is specified, set to webbrowser
     if browser_path:
-        for name in browser_path:
-            register_browser(name, name)
+        for path in browser_path:
+            register_browser(path, path)
         browsers.extend(list(browser_path))
     # When bn is specified, check if webbrowser is configured
     if browser_name:
@@ -514,7 +644,7 @@ def cli(browser_name, browser_path, config, fast, browser_list, urls, urls_):
 
     logger.info(f"URLs to open: {urls}")
 
-    asyncio.run(main(browsers, urls, fast))
+    async_run_main(browsers, urls, fast)
 
 
 if __name__ == "__main__":
