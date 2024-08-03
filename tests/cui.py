@@ -3,18 +3,16 @@ from pathlib import Path
 
 import click
 
-from tests import main
-
-ROOT_DIR = main.ROOT_DIR
-
-logger = main.logger
-
-register_all_installed_browsers = main.register_all_installed_browsers
-display_registered_browsers = main.display_registered_browsers
-run_with_parameter_file = main.run_with_parameter_file
-get_default_browser_path_windows = main.get_default_browser_path_windows
-register_browser = main.register_browser
-async_run_main = main.async_run_main
+from .main import (
+    ROOT_DIR,
+    async_run_main,
+    display_registered_browsers,
+    get_default_browser_path_windows,
+    logger,
+    register_all_installed_browsers,
+    register_browser,
+    run_with_parameter_file,
+)
 
 
 @click.command(context_settings=dict(help_option_names=["-h", "--help"]))
